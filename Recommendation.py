@@ -70,7 +70,7 @@ def search (embeddings,collection):
     
     data=[embeddings], 
     anns_field="vector",  
-    output_fields=["email","description"],
+    output_fields=["id","description"],
     limit=10,
     param=search_params
 )
@@ -81,7 +81,7 @@ def search (embeddings,collection):
         for hit in hits:
             # gets the value of an output field specified in the search request.
             # dynamic fields are supported, but vector fields are not supported yet.    
-            emails.append(hit.entity.get('email'))
+            emails.append(hit.entity.get('id'))
             descriptions.append(hit.entity.get('description'))
 
     return emails,descriptions
@@ -185,7 +185,7 @@ def store_data():
         # Prepare data for insertion
         data_row = {
             "vector": embeddings_list,
-            "email": title,
+            "id": id,
             "description": description,
           #  "category": category
         }
@@ -204,14 +204,13 @@ def store_data():
 @app.route('/get_recommendation', methods=['POST'])
 def get_recommendation():
     try:
-        text = request.get_json()  # Ensures that the JSON is parsed or raises an error            
-       # Validate if the input is a dictionary
+        text = request.get_json()  
         if not isinstance(text, dict):
             return jsonify({"error": "Input data must be a JSON object"}), 400
         
-        # Extract fields from the JSON
         description = text.get("description", "").strip()
         category = text.get("category", "").strip()
+        #id = text.get("id", "").strip()
         resources_required = text.get("resourcesRequired", [])
         
         if not description or not category:
@@ -222,21 +221,19 @@ def get_recommendation():
                 resource_type = resource.get("type", "Unknown Type").strip()
                 resource_details = resource.get("details", [])
                 
-                # Ensure details is a list
                 if not isinstance(resource_details, list):
                     resource_details = [str(resource_details)]
                 
-                # Format and append resource details to the description
                 resource_details_str = ", ".join(map(str, resource_details))
                 description += f"\n- {resource_type}: {resource_details_str}"
         else:
             return jsonify({"error": "Invalid format for 'resourcesRequired', must be a list"}), 400
         
         embeddings = embeddings_pipeline.transform(description)  
-        emails=[]
+        id=[]
         descriptions=[]
-        emails,descriptions=search(embeddings,collection)
-        return jsonify({"emails":emails,"descriptions":descriptions })
+        id,descriptions=search(embeddings,collection)
+        return jsonify({"ids":id,"descriptions":descriptions })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -244,32 +241,48 @@ def get_recommendation():
 
 @app.route('/update', methods=['POST'])
 def update_data():
-    text = request.get_json()
-    data = pd.DataFrame([text])
-    
-    if "email" not in data.columns or ("description" not in data.columns and "image" not in data.columns):
-        return jsonify({"error": "Input JSON must contain 'email' and 'description' or image fields"}), 400
-    
-    email = data["email"].values[0]
-    descriptions = data["description"].values[0]
-    image=data["image"].values[0]
-    img_sum=img_sum(image)
-    descriptions+="and the business model canvas is"+img_sum
-    embeddings = embeddings_pipeline.transform(descriptions) 
     try:
-        data_rows = []
-        data_rows.extend([
-        {"vector": embeddings,
-            "email":email,
-            "description":descriptions}
-        ])
-        collection.upsert(data_rows)
-        collection.flush()
+        text = request.get_json()  
+        if not isinstance(text, dict):
+            return jsonify({"error": "Input data must be a JSON object"}), 400
+        
+        description = text.get("description", "").strip()
+        category = text.get("category", "").strip()
+        id=text.get("id","").strip()
+        resources_required = text.get("resourcesRequired", [])
+        
+        if not description or not id:
+            return jsonify({"error": "Missing required fields: 'description' or 'category'"}), 400
+        
+        if isinstance(resources_required, list):
+            for resource in resources_required:
+                resource_type = resource.get("type", "Unknown Type").strip()
+                resource_details = resource.get("details", [])
+                
+                if not isinstance(resource_details, list):
+                    resource_details = [str(resource_details)]
+                
+                resource_details_str = ", ".join(map(str, resource_details))
+                description += f"\n- {resource_type}: {resource_details_str}"
+        else:
+            return jsonify({"error": "Invalid format for 'resourcesRequired', must be a list"}), 400
+        embeddings = embeddings_pipeline.transform(description) 
+        try:
+            data_rows = []
+            data_rows.extend([
+            {"vector": embeddings,
+                "id":id,
+                "description":description}
+            ])
+            collection.upsert(data_rows)
+            collection.flush()
 
 
-        return jsonify({"status":"updated"})
-    except Exception as x:
-        return jsonify({"error": str(x)}),500    
+            return jsonify({"status":"updated"})
+        except Exception as x:
+            return jsonify({"error": str(x)}),500    
+    except Exception as ex:
+        return jsonify({"error":str(ex)},500)
 
 
 @app.route('/delete', methods=['POST'])
@@ -278,12 +291,12 @@ def delete_data():
         text = request.get_json()
         data = pd.DataFrame([text])
         
-        if "email" not in data.columns :
+        if "id" not in data.columns :
             return jsonify({"error": "Input JSON must contain 'email'  field"}), 400
         
-        email = data["email"].values[0]
-        expre=f'email == "{email}"' 
-        results = collection.query(expre, output_fields=["email"], limit=1)
+        email = data["id"].values[0]
+        expre=f'id == "{id}"' 
+        results = collection.query(expre, output_fields=["id"], limit=1)
         if len(results)==0:
             return jsonify({"error": "No data found for the given email."}), 500
         
@@ -299,4 +312,4 @@ def delete_data():
 
     
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True,port=3000)
